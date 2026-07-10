@@ -237,3 +237,4 @@ MIT License — see LICENSE file.
 - Hermes Agent (any version supporting plugins and skills)
 - Linux, macOS, Windows
 - Agnes AI API (apihub.agnes-ai.com)
+- TEst Update
