@@ -184,6 +184,28 @@ deliver: "origin"
 
 ## Common Issues
 
+### Large Payload via Data URI (2MB+)
+
+Image-to-video via Data URI produces a ~2.3MB payload (1024×1024 PNG). Do NOT inline in curl `-d` as a string argument — it hits shell argument length limits. Instead:
+```bash
+# Write payload to temp file
+python3 -c "
+import json, base64
+with open('ref.png','rb') as f:
+    b64 = base64.b64encode(f.read()).decode()
+payload = {'model':'agnes-video-v2.0','prompt':'...',
+           'image':f'data:image/png;base64,{b64}',
+           'num_frames':121,'frame_rate':24}
+with open('/tmp/vid_payload.json','w') as f:
+    json.dump(payload, f)
+"
+# Pass via -d @file (not inline)
+curl -s -X POST "https://apihub.agnes-ai.com/v1/videos" \
+  -H "Authorization: Bearer $AGNES_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/vid_payload.json
+```
+
 ### Task Completed But No URL
 
 Some tasks show `status: completed` and `progress: 100` but return no `url` field.

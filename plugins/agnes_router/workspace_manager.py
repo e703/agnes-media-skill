@@ -13,7 +13,34 @@ _DEFAULT_ROOT = Path.home() / "workspace"
 WORKSPACE_ROOT = Path(
     os.getenv("AGNES_WORKSPACE_ROOT", str(_DEFAULT_ROOT))
 ).expanduser().resolve()
-ALLOWED_SUBDIRS = {"images", "videos"}
+ALLOWED_SUBDIRS = {
+    "sources/images", "sources/videos", "sources/scripts", "sources/others",
+    "target/images", "target/videos", "target/scripts", "target/others",
+}
+
+PROJECT_SKELETON = [
+    "sources/images",
+    "sources/videos",
+    "sources/scripts",
+    "sources/others",
+    "target/images",
+    "target/videos",
+    "target/scripts",
+    "target/others",
+]
+
+
+def ensure_project_skeleton(project_name: str) -> None:
+    """Create the full project directory skeleton if the project root doesn't exist yet.
+
+    This guarantees every project has the complete ``sources/`` and ``target/``
+    subdirectory structure on first use.
+    """
+    project_root = WORKSPACE_ROOT / project_name
+    if project_root.exists():
+        return
+    for subdir in PROJECT_SKELETON:
+        (project_root / subdir).mkdir(parents=True, exist_ok=True)
 
 
 def get_and_validate_project_path(project_name: str, sub_dir: str = "") -> Path:
@@ -25,7 +52,7 @@ def get_and_validate_project_path(project_name: str, sub_dir: str = "") -> Path:
         A single-directory slug. Must not contain path separators, "..",
         absolute paths, or non-ASCII characters.
     sub_dir : str
-        One of the allowed subdirectories (images, videos).
+        Allowed subdirectory: "target/images" or "target/videos".
 
     Returns
     -------
@@ -58,6 +85,10 @@ def get_and_validate_project_path(project_name: str, sub_dir: str = "") -> Path:
     target = WORKSPACE_ROOT / project_name
     if sub_dir:
         target = target / sub_dir
+
+    # Create full project skeleton on first use
+    ensure_project_skeleton(project_name)
+
     target.mkdir(parents=True, exist_ok=True)
 
     real_target = target.resolve()

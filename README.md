@@ -1,8 +1,9 @@
 # Agnes Media Skill
 
-Hermes Agent plugin and skill for Agnes AI image and video generation. Provides
-safe, configurable tools for text-to-image and text-to-video generation with
-workspace isolation and retry logic.
+Hermes Agent plugin and skill for Agnes AI media generation. Provides
+safe, configurable tools for **text-to-image**, **image-to-image**,
+**multi-image composition**, and **video** generation with
+workspace isolation, retry logic, and async video polling.
 
 ## Quick Start
 
@@ -22,14 +23,24 @@ agnes-media-skill/
 │       ├── tools.py            # Image/video generation handlers
 │       └── workspace_manager.py # Path validation + security
 ├── skills/
-│   └── creative/
-│       └── agnes-media/        # Hermes Agent skill
-│           ├── SKILL.md        # Skill documentation
-│           ├── scripts/
-│           │   └── check_task.py    # Video task status checker
-│           └── references/
-│               └── video-async-guide.md  # Async video workflow guide
+│   ├── creative/
+│   │   └── agnes-media/        # Hermes Agent skill (main)
+│   │       ├── SKILL.md        # Skill documentation
+│   │       ├── scripts/
+│   │       │   ├── check_task.py        # Video task status checker
+│   │       │   └── to_data_uri.py       # File → Data URI converter
+│   │       ├── templates/
+│   │       │   └── image-queue-retry.py # Image 503 retry example
+│       │       └── references/
+│       │           ├── image-api-guide.md            # Image API reference (i2i, multi-image, queue retry)
+│       │           ├── video-async-guide.md          # Async video workflow guide
+│       │           ├── deployment-workflow.md        # Source-to-deployment sync workflow
+│       │           └── png-metadata-extraction.md    # Extract embedded prompt metadata from PNGs
+│   └── media/
+│       └── agnes-video-async-monitor/   # Async video polling skill
+│           └── SKILL.md                  # Background-process polling workflow
 ├── examples/                   # Example prompts and configurations
+├── DEPLOYMENT_MANUAL.md        # Deployment guide
 ├── README.md                   # This file
 ├── LICENSE
 └── .gitignore
@@ -37,15 +48,35 @@ agnes-media-skill/
 
 ## Features
 
-- **Secure workspace isolation** — all generated files saved under a configurable
-  workspace root with path traversal protection
-- **Automatic retry** — transient errors (timeout, 503, rate limit) are retried
-  with exponential backoff
-- **Async video support** — video generation is handled correctly with polling
-  and cron-based notification patterns
-- **Environment configurable** — every parameter (endpoints, timeouts, models,
-  workspace root) can be overridden via environment variables
-- **Cron-safe** — works in scheduled jobs with automatic API key extraction
+- **Three image generation modes** — 文生图 (text-to-image), 图生图 (image-to-image), 多图合成 (multi-image composition). Supports URL and Data URI image input.
+- **Three video generation modes** — 文生视频 (text-to-video), 图生视频 (image-to-video / ti2vid), 关键帧动画 (keyframe animation). Configurable resolution, frame count, frame rate, seed, and negative prompt.
+- **Secure workspace isolation** — all generated files saved under a configurable workspace root with path traversal protection
+- **Automatic retry** — transient errors (timeout, 503, rate limit) are retried with configurable delay (30s for image queue, 3s for general errors)
+- **Async video support** — video generation is handled correctly with background-process polling (30s interval) and automatic download on completion
+- **Environment configurable** — every parameter (endpoints, timeouts, models, workspace root) can be overridden via environment variables
+- **Cron-safe** — works in scheduled jobs with automatic API key extraction. Note: video polling uses background processes (not cron) because cron's minimum recurring interval is 30 minutes.
+
+## Project Directory Convention
+
+Generated media files follow a structured project layout under the workspace root. The full skeleton is created automatically on first use:
+
+```
+~/workspace/
+└── <project_name>/
+    ├── sources/          ← Input assets: reference images, source files
+    │   ├── images/       ← Reference images (e.g. from chat tools)
+    │   ├── videos/       ← Source video files
+    │   ├── scripts/      ← Generation scripts
+    │   └── others/       ← Other input files (configs, payloads)
+    └── target/           ← Output results: generated media files
+        ├── images/       ← Image outputs (from generate_image_via_pic01)
+        ├── videos/       ← Video outputs (from generate_video_via_mov01)
+        ├── scripts/      ← Output scripts, logs
+        └── others/       ← Other output files (URL lists, metadata)
+```
+
+All media tools save outputs to `target/images/` or `target/videos/` automatically.
+Input assets (reference images from chat tools, local files, etc.) should be placed in the corresponding `sources/<category>/` subdirectory.
 
 ## Configuration
 
@@ -64,8 +95,8 @@ All variables are optional except `AGNES_API_KEY`.
 | `AGNES_IMAGE_TIMEOUT` | int | `180` | Image request timeout (seconds) |
 | `AGNES_VIDEO_TIMEOUT` | int | `300` | Video submission timeout (seconds) |
 | `AGNES_DOWNLOAD_TIMEOUT` | int | `300` | Media download timeout (seconds) |
-| `AGNES_MAX_RETRIES` | int | `2` | Max retry attempts on transient errors |
-| `AGNES_RETRY_DELAY` | float | `3.0` | Delay between retries (seconds) |
+| `AGNES_MAX_RETRIES` | int | `10` | Max retry attempts (image queue 503: 10+) |
+| `AGNES_RETRY_DELAY` | float | `30.0` | Delay between retries (image queue: 30s) |
 
 ### Plugin YAML Configuration
 
@@ -84,8 +115,8 @@ plugins:
       image_timeout: 180
       video_timeout: 300
       download_timeout: 300
-      max_retries: 2
-      retry_delay: 3.0
+      max_retries: 10
+      retry_delay: 30.0
 ```
 
 ## Deployment
@@ -95,7 +126,7 @@ plugins:
 1. Copy the `plugins/agnes_router` directory to your Hermes Agent plugins path:
 
    ```bash
-   cp -r plugins/agnes_router ~/.hermes/profiles/chat_01/plugins/
+   cp -r plugins/agnes_router ~/.hermes/profiles/<profile>/plugins/
    ```
 
 2. Enable the plugin in `config.yaml`:
@@ -109,20 +140,24 @@ plugins:
 3. Set the API key:
 
    ```bash
-   export AGNES_API_KEY="sk-your-key-here"
+   export AGNES_API_KEY="sk-…"
    ```
 
 4. Restart Hermes Agent.
 
-### Option 2: Hermes Agent Skill
+### Option 2: Hermes Agent Skills
 
-1. Copy the `skills/creative/agnes-media` directory to your skills path:
+1. Copy the skills to your skills path:
 
    ```bash
-   cp -r skills/creative/agnes-media ~/.hermes/profiles/chat_01/skills/creative/
+   # Main skill (docs + scripts)
+   cp -r skills/creative/agnes-media ~/.hermes/profiles/<profile>/skills/creative/
+   
+   # Async video monitoring skill (background-process polling workflow)
+   cp -r skills/media/agnes-video-async-monitor ~/.hermes/profiles/<profile>/skills/media/
    ```
 
-2. The skill documents the tool usage patterns and best practices.
+2. The skills document the tool usage patterns and best practices.
    The actual tool handlers come from the plugin (Option 1).
 
 ### Option 3: Standalone Script Usage
@@ -130,29 +165,35 @@ plugins:
 Use `check_task.py` independently:
 
 ```bash
-python3 skills/creative/agnes-media/scripts/check_task.py task_abc123
+python3 skills/creative/agnes-media/scripts/check_task.py <video_id>
 ```
 
 ## Tool Reference
 
 ### generate_image_via_pic01
 
-Generates an image from a text prompt.
+Generates images from text, edits existing images, or composites multiple images.
 
 **Parameters:**
 
 | Param | Required | Type | Default | Description |
 |-------|----------|------|---------|-------------|
 | `project_name` | Yes | string | — | Project slug (ASCII only, no slashes) |
-| `prompt` | Yes | string | — | Detailed visual description |
+| `prompt` | Yes | string | — | Detailed visual description or edit instruction |
 | `file_name` | Yes | string | — | Output filename with extension |
 | `size` | No | string | `1024x1024` | Image dimensions (WIDTHxHEIGHT) |
+| `image` | No | array[string] | — | Image URL(s) or Data URI(s) for 图生图/多图合成 |
 
-**Output:** Image saved to `<workspace>/<project>/images/<file_name>`
+**Modes:**
+- **文生图**: `image` not set — generate from prompt
+- **图生图**: `image: [1 URL]` — edit/transform existing image
+- **多图合成**: `image: [2+ URLs]` — combine multiple reference images
+
+**Output:** Image saved to `<workspace>/<project>/target/images/<file_name>`
 
 ### generate_video_via_mov01
 
-Generates a video from a text prompt.
+Generates videos from text, images, or keyframe sequences.
 
 **Parameters:**
 
@@ -161,11 +202,22 @@ Generates a video from a text prompt.
 | `project_name` | Yes | string | — | Project slug (ASCII only, no slashes) |
 | `prompt` | Yes | string | — | Detailed video/storyboard description |
 | `file_name` | Yes | string | — | Output filename with extension |
+| `mode` | No | string | — | `"ti2vid"` (image-to-video) or `"keyframes"` |
+| `image` | No | string | — | Single image URL for ti2vid mode |
+| `height` | No | int | 768 | Video height (auto-mapped to preset) |
+| `width` | No | int | 1152 | Video width |
+| `num_frames` | No | int | 121 | Total frames (81, 121, 241, 441) |
+| `frame_rate` | No | number | 24 | Frames per second |
+| `num_inference_steps` | No | int | — | Inference steps |
+| `seed` | No | int | — | Random seed |
+| `negative_prompt` | No | string | — | Content to avoid |
+| `extra_body` | No | object | — | For keyframes: `{mode: "keyframes", image: [...]}` |
 
-**Output:** Video saved to `<workspace>/<project>/videos/<file_name>`
+**Output:** Video saved to `<workspace>/<project>/target/videos/<file_name>`
 
 **Note:** Video generation is async. The tool returns immediately with a task ID.
-Use `check_task.py` or direct API polling to check completion status.
+Use `monitor_video.py` (or `monitor_keyframe.py` for keyframes) from the `agnes-video-async-monitor` skill for background polling, or `check_task.py` for manual status checks.
+Always query `GET /agnesapi?video_id=<real_video_id>` — never `GET /v1/videos/{task_id}`.
 
 ## Security & Operational Guidelines
 
@@ -185,7 +237,8 @@ You have two subordinate specialized capability interfaces. Unless the user asks
 3. If the user has not explicitly specified a current project, you must ask or guide the user to define a compliant project name, e.g. `brand_retro`, `game_design`, `project_alpha`.
 4. When calling subordinate media tools, you must accurately pass the current project name as `project_name` and propose a reasonable filename with the correct extension.
 5. `project_name` must be a single directory slug — no `../`, slashes, backslashes, absolute paths, or any content attempting to escape the workspace.
-6. Never attempt to construct out-of-bounds paths such as `/etc`, `../`, `~/.ssh`. Media tools confine files to `<workspace>/<project>/images` or `<workspace>/<project>/videos`.
+6. Never attempt to construct out-of-bounds paths such as `/etc`, `../`, `~/.ssh`.
+7. Follow the project directory convention: `<project>/sources/` for inputs, `<project>/target/` for outputs.
 
 ### Interaction & Behavioral Norms
 
@@ -199,11 +252,13 @@ You have two subordinate specialized capability interfaces. Unless the user asks
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `ok: false` with async message | Video queued | Poll task status |
+| `ok: false` with async message | Video queued | Poll task status via `/agnesapi?video_id=` |
 | `ok: false` with `security_blocked` | Invalid project/filename | Use ASCII-only slugs |
+| `ok: false` with HTTP 503 | Image queue full | Retry with 30s delay, up to 10+ times |
 | `ok: false` with HTTP error | API returned error | Check logs, retry |
 | `ok: false` with connection error | Network issue | Retry (automatic) |
 | `ok: false` with "无效的令牌" | Bad API key | Check AGNES_API_KEY |
+| `ok: false` with 400 Bad Request | Invalid params | Check request body format |
 
 ## Maintenance
 
@@ -215,17 +270,19 @@ You have two subordinate specialized capability interfaces. Unless the user asks
 
 ### Updating the Skill
 
-1. Edit `skills/creative/agnes-media/SKILL.md`
+1. Edit `skills/creative/agnes-media/SKILL.md` or `skills/media/agnes-video-async-monitor/SKILL.md`
 2. Update version number in frontmatter
 3. Commit changes
 
 ### Troubleshooting
 
 1. **API key not working**: Verify `AGNES_API_KEY` is set and not a literal string
-2. **Videos never complete**: Check task status via `check_task.py`
-3. **Path errors**: Ensure project_name contains only ASCII letters, digits, `-`, `_`
-4. **Rate limits**: Increase `AGNES_MAX_RETRIES` or `AGNES_RETRY_DELAY`
-5. **Timeouts**: Increase `AGNES_IMAGE_TIMEOUT` or `AGNES_VIDEO_TIMEOUT`
+2. **Videos never complete**: Check task status via `check_task.py` — use `video_id` not `task_id`
+3. **Image gets 503 error**: Increase `AGNES_MAX_RETRIES` to 10+ and `AGNES_RETRY_DELAY` to 30s
+4. **Path errors**: Ensure project_name contains only ASCII letters, digits, `-`, `_`
+5. **Rate limits**: Increase `AGNES_MAX_RETRIES` or `AGNES_RETRY_DELAY`
+6. **Timeouts**: Increase `AGNES_IMAGE_TIMEOUT` or `AGNES_VIDEO_TIMEOUT`
+7. **response_format error**: Must be in `extra_body`, never at top level
 
 ## License
 
@@ -237,4 +294,3 @@ MIT License — see LICENSE file.
 - Hermes Agent (any version supporting plugins and skills)
 - Linux, macOS, Windows
 - Agnes AI API (apihub.agnes-ai.com)
-- TEst Update

@@ -165,7 +165,7 @@ def generate_image_via_pic01(args: dict, **kwargs) -> str:
         if not prompt:
             return _json_response({"ok": False, "error": "prompt is required"})
 
-        save_dir = get_and_validate_project_path(project_name, "images")
+        save_dir = get_and_validate_project_path(project_name, "target/images")
         safe_name = safe_leaf_filename(file_name, ".png")
         target = save_dir / safe_name
 
@@ -175,6 +175,13 @@ def generate_image_via_pic01(args: dict, **kwargs) -> str:
             "n": 1,
             "size": size,
         }
+
+        # Add image input for 图生图 / 多图合成
+        image = args.get("image")
+        if image:
+            if isinstance(image, list) and len(image) > 0:
+                payload["extra_body"] = {"image": image}
+
         result = _post_json(IMAGE_ENDPOINT, payload, timeout=IMAGE_REQUEST_TIMEOUT)
         remote_url = _extract_url(result)
         b64 = _extract_b64(result)
@@ -196,7 +203,7 @@ def generate_image_via_pic01(args: dict, **kwargs) -> str:
             "service": "pic_01",
             "model": IMAGE_MODEL,
             "path": str(target),
-            "relative_path": f"~/workspace/{project_name}/images/{safe_name}",
+            "relative_path": f"~/workspace/{project_name}/target/images/{safe_name}",
             "remote_url": remote_url,
             "bytes": len(content),
         })
@@ -225,14 +232,48 @@ def generate_video_via_mov01(args: dict, **kwargs) -> str:
         if not prompt:
             return _json_response({"ok": False, "error": "prompt is required"})
 
-        save_dir = get_and_validate_project_path(project_name, "videos")
+        save_dir = get_and_validate_project_path(project_name, "target/videos")
         safe_name = safe_leaf_filename(file_name, ".mp4")
         target = save_dir / safe_name
 
-        payload = {
+        payload: dict[str, Any] = {
             "model": VIDEO_MODEL,
             "prompt": prompt,
         }
+
+        # Extended parameters — only add non-None values
+        mode = args.get("mode")
+        image = args.get("image")
+        height = args.get("height")
+        width = args.get("width")
+        num_frames = args.get("num_frames")
+        frame_rate = args.get("frame_rate")
+        num_inference_steps = args.get("num_inference_steps")
+        seed = args.get("seed")
+        negative_prompt = args.get("negative_prompt")
+        extra_body = args.get("extra_body")
+
+        if mode:
+            payload["mode"] = mode
+        if image:
+            payload["image"] = image
+        if height is not None:
+            payload["height"] = height
+        if width is not None:
+            payload["width"] = width
+        if num_frames is not None:
+            payload["num_frames"] = num_frames
+        if frame_rate is not None:
+            payload["frame_rate"] = frame_rate
+        if num_inference_steps is not None:
+            payload["num_inference_steps"] = num_inference_steps
+        if seed is not None:
+            payload["seed"] = seed
+        if negative_prompt:
+            payload["negative_prompt"] = negative_prompt
+        if extra_body:
+            payload["extra_body"] = extra_body
+
         result = _post_json(
             VIDEO_ENDPOINT, payload, timeout=VIDEO_REQUEST_TIMEOUT
         )
@@ -257,7 +298,7 @@ def generate_video_via_mov01(args: dict, **kwargs) -> str:
             "service": "mov_01",
             "model": VIDEO_MODEL,
             "path": str(target),
-            "relative_path": f"~/workspace/{project_name}/videos/{safe_name}",
+            "relative_path": f"~/workspace/{project_name}/target/videos/{safe_name}",
             "remote_url": remote_url,
             "bytes": len(content),
         })
